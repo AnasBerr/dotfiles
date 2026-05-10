@@ -19,6 +19,56 @@ except ImportError:
 ALLOWED_TLD = ".fr"
 _PASSWORD_RE = re.compile(r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z\d]).{8,}$")
 
+# Domaines de webmail personnel connus — tout domaine absent de cette liste
+# sera considéré comme professionnel/entreprise et exclu si l'option est activée.
+PERSONAL_DOMAINS = {
+    # Google
+    "gmail.com", "googlemail.com",
+    # Microsoft / Live
+    "hotmail.fr", "hotmail.com", "hotmail.be", "hotmail.ch",
+    "outlook.fr", "outlook.com", "outlook.be", "outlook.ch",
+    "live.fr", "live.com", "live.be", "live.ch", "live.ca",
+    "msn.com",
+    # Yahoo
+    "yahoo.fr", "yahoo.com", "yahoo.be", "yahoo.ch", "yahoo.ca",
+    "ymail.com",
+    # FAI France
+    "orange.fr", "wanadoo.fr",
+    "sfr.fr", "sfr.net", "neuf.fr",
+    "free.fr",
+    "bbox.fr", "bouyguestelecom.fr",
+    "numericable.fr",
+    "alice.fr", "cegetel.net", "club-internet.fr",
+    "tele2.fr", "nordnet.fr", "9online.fr",
+    # Laposte
+    "laposte.net",
+    # FAI Belgique / Suisse / Canada
+    "skynet.be", "telenet.be", "proximus.be",
+    "bluewin.ch", "hispeed.ch",
+    # Apple
+    "icloud.com", "me.com", "mac.com",
+    # ProtonMail / privacy
+    "protonmail.com", "protonmail.ch", "proton.me",
+    "tutanota.com", "tutanota.de", "tuta.io",
+    "mailfence.com",
+    # AOL / Verizon
+    "aol.com", "aol.fr",
+    # Divers webmail grand public
+    "mail.com", "email.com",
+    "gmx.fr", "gmx.com", "gmx.net",
+    "web.de",
+    "zoho.com",
+    "yandex.com", "yandex.fr", "yandex.ru",
+    "qq.com", "163.com", "126.com",
+    "naver.com",
+    "rediffmail.com",
+    "inbox.com",
+    "fastmail.com", "fastmail.fm",
+    "hushmail.com",
+    "guerrillamail.com",
+    "dispostable.com",
+}
+
 C_BG        = "#1e1e2e"
 C_SURFACE   = "#2a2a3e"
 C_PURPLE    = "#7c3aed"
@@ -63,6 +113,10 @@ def parse_line(line: str):
     return email, password
 
 
+def is_personal_domain(domain: str) -> bool:
+    return domain.lower() in PERSONAL_DOMAINS
+
+
 def load_existing_emails(path: str) -> set:
     emails = set()
     try:
@@ -76,10 +130,12 @@ def load_existing_emails(path: str) -> set:
     return emails
 
 
-def filter_credentials(lines: list, existing_emails: set = None) -> dict:
+def filter_credentials(lines: list, existing_emails: set = None,
+                        exclude_professional: bool = False) -> dict:
     total = 0
     kept = []
     removed_domain = 0
+    removed_professional = 0
     removed_duplicate = 0
     removed_existing = 0
     removed_weak = 0
@@ -100,6 +156,9 @@ def filter_credentials(lines: list, existing_emails: set = None) -> dict:
         if extract_tld(domain) is None:
             removed_domain += 1
             continue
+        if exclude_professional and not is_personal_domain(domain):
+            removed_professional += 1
+            continue
         if not is_strong_password(password):
             removed_weak += 1
             continue
@@ -117,6 +176,7 @@ def filter_credentials(lines: list, existing_emails: set = None) -> dict:
         "total": total,
         "kept": kept,
         "removed_domain": removed_domain,
+        "removed_professional": removed_professional,
         "removed_duplicate": removed_duplicate,
         "removed_existing": removed_existing,
         "removed_weak": removed_weak,
@@ -204,7 +264,7 @@ class EmailFilterApp:
         self.root.resizable(False, False)
         self.root.configure(bg=C_BG)
         self._build_ui()
-        self._center(620, 780)
+        self._center(620, 860)
         self.root.mainloop()
 
     def _center(self, w, h):
@@ -245,6 +305,31 @@ class EmailFilterApp:
                      text="⚠  Glisser-déposer indisponible — pip install tkinterdnd2",
                      font=("Segoe UI", 8), bg=C_BG, fg=C_YELLOW
                      ).pack(anchor="w", pady=(2, 0))
+
+        # ── Séparateur ──────────────────────────────────────────────
+        tk.Frame(body, bg=C_SURFACE, height=1).pack(fill="x", pady=14)
+
+        # ── Options de filtrage ──────────────────────────────────────
+        self._section_label(body, "Options de filtrage")
+
+        opt_frame = tk.Frame(body, bg=C_SURFACE, padx=14, pady=10)
+        opt_frame.pack(fill="x", pady=(6, 0))
+
+        self._excl_pro_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            opt_frame,
+            text="  Exclure les emails professionnels / entreprises",
+            variable=self._excl_pro_var,
+            bg=C_SURFACE, fg=C_TEXT, selectcolor=C_BG,
+            activebackground=C_SURFACE, activeforeground=C_TEXT,
+            font=("Segoe UI", 10, "bold"), cursor="hand2",
+        ).pack(anchor="w")
+        tk.Label(
+            opt_frame,
+            text="      Ne garde que les webmails personnels connus : Gmail, Yahoo, Orange, Hotmail, SFR, Free…\n"
+                 "      Tout domaine personnalisé (@auchan, @boulangerie-ange…) sera exclu.",
+            font=("Segoe UI", 8), bg=C_SURFACE, fg=C_TEXT_DIM, justify="left",
+        ).pack(anchor="w", pady=(2, 0))
 
         # ── Séparateur ──────────────────────────────────────────────
         tk.Frame(body, bg=C_SURFACE, height=1).pack(fill="x", pady=14)
@@ -383,12 +468,15 @@ class EmailFilterApp:
         self._progress.start(12)
         self._write_stats([("  Traitement en cours…", None)])
 
+        excl_pro = self._excl_pro_var.get()
+
         def worker():
             try:
                 existing_emails = load_existing_emails(output_path) if append_mode else None
                 with open(self._input_path, encoding="utf-8", errors="replace") as f:
                     lines = f.readlines()
-                stats = filter_credentials(lines, existing_emails=existing_emails)
+                stats = filter_credentials(lines, existing_emails=existing_emails,
+                                           exclude_professional=excl_pro)
                 write_mode = "a" if append_mode else "w"
                 with open(output_path, write_mode, encoding="utf-8", newline="\n") as f:
                     if stats["kept"]:
@@ -421,6 +509,12 @@ class EmailFilterApp:
             )
         segments += [
             (f"  Supprimés (domaine hors .fr) : {stats['removed_domain']:<6}  ({pct(stats['removed_domain'])})\n", "yellow"),
+        ]
+        if stats["removed_professional"]:
+            segments.append(
+                (f"  Supprimés (pro/entreprise)   : {stats['removed_professional']:<6}  ({pct(stats['removed_professional'])})\n", "yellow")
+            )
+        segments += [
             (f"  Supprimés (mot de passe)     : {stats['removed_weak']:<6}  ({pct(stats['removed_weak'])})\n",     "yellow"),
             (f"  Supprimés (doublons)         : {stats['removed_duplicate']:<6}  ({pct(stats['removed_duplicate'])})\n", "yellow"),
             (f"  Supprimés (malformés)        : {stats['removed_malformed']:<6}  ({pct(stats['removed_malformed'])})\n", "red"),
