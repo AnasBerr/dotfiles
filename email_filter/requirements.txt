@@ -1,2 +1,1 @@
-# Aucune dépendance externe requise.
-# Python 3.8+ avec tkinter (inclus dans l'installateur Windows officiel de Python).
+tkinterdnd2
