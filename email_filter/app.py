@@ -29,6 +29,7 @@ C_GREEN     = "#a6e3a1"
 C_YELLOW    = "#f9e2af"
 C_RED_SOFT  = "#f38ba8"
 C_STATS_BG  = "#13131f"
+C_ENTRY_OFF = "#222233"
 
 
 def get_desktop_path() -> str:
@@ -63,13 +64,11 @@ def parse_line(line: str):
 
 
 def load_existing_emails(path: str) -> set:
-    """Return the set of lowercased emails already present in an existing output file."""
     emails = set()
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for raw in f:
-                line = raw.strip()
-                parsed = parse_line(line)
+                parsed = parse_line(raw.strip())
                 if parsed:
                     emails.add(parsed[0].lower())
     except FileNotFoundError:
@@ -183,6 +182,17 @@ class DropZone(tk.Canvas):
         self._draw()
 
 
+def _make_entry(parent, var, width=34, active=True):
+    e = tk.Entry(parent, textvariable=var, font=("Segoe UI", 10),
+                 bg=C_SURFACE if active else C_ENTRY_OFF,
+                 fg=C_TEXT if active else C_TEXT_DIM,
+                 disabledbackground=C_ENTRY_OFF, disabledforeground=C_TEXT_DIM,
+                 insertbackground=C_TEXT, relief="flat", bd=0, width=width,
+                 state="normal" if active else "disabled")
+    e.pack(side="left", padx=(10, 0), ipady=7, ipadx=8)
+    return e
+
+
 class EmailFilterApp:
     def __init__(self):
         self._input_path = None
@@ -194,7 +204,7 @@ class EmailFilterApp:
         self.root.resizable(False, False)
         self.root.configure(bg=C_BG)
         self._build_ui()
-        self._center(600, 720)
+        self._center(620, 780)
         self.root.mainloop()
 
     def _center(self, w, h):
@@ -220,60 +230,67 @@ class EmailFilterApp:
 
         self._drop = DropZone(body, on_file=self._on_file,
                               bg=C_SURFACE, highlightthickness=0,
-                              cursor="hand2", height=118)
+                              cursor="hand2", height=108)
         self._drop.pack(fill="x", pady=(6, 0))
+
+        # Nom du fichier sélectionné
+        self._input_label = tk.Label(
+            body, text="Aucun fichier sélectionné",
+            font=("Segoe UI", 9), bg=C_BG, fg=C_TEXT_DIM, anchor="w",
+        )
+        self._input_label.pack(fill="x", pady=(5, 0))
 
         if not HAS_DND:
             tk.Label(body,
                      text="⚠  Glisser-déposer indisponible — pip install tkinterdnd2",
                      font=("Segoe UI", 8), bg=C_BG, fg=C_YELLOW
-                     ).pack(anchor="w", pady=(3, 0))
+                     ).pack(anchor="w", pady=(2, 0))
 
         # ── Séparateur ──────────────────────────────────────────────
-        tk.Frame(body, bg=C_SURFACE, height=1).pack(fill="x", pady=16)
+        tk.Frame(body, bg=C_SURFACE, height=1).pack(fill="x", pady=14)
 
         # ── Fichier de sortie ───────────────────────────────────────
         self._section_label(body, "Fichier de sortie")
 
         dir_row = tk.Frame(body, bg=C_BG)
-        dir_row.pack(fill="x", pady=(6, 0))
-        tk.Label(dir_row, text="📁 Dossier :", font=("Segoe UI", 9),
+        dir_row.pack(fill="x", pady=(5, 10))
+        tk.Label(dir_row, text="📁", font=("Segoe UI", 9),
                  bg=C_BG, fg=C_TEXT_DIM).pack(side="left")
         tk.Label(dir_row, text=self._output_dir, font=("Segoe UI", 9),
-                 bg=C_BG, fg=C_TEXT, wraplength=430, justify="left"
-                 ).pack(side="left", padx=(8, 0))
+                 bg=C_BG, fg=C_TEXT_DIM).pack(side="left", padx=(6, 0))
 
-        name_row = tk.Frame(body, bg=C_BG)
-        name_row.pack(fill="x", pady=(12, 0))
-        tk.Label(name_row, text="Nom du fichier :", font=("Segoe UI", 9),
+        # Radio vars
+        self._mode_var = tk.StringVar(value="new")
+
+        radio_kw = dict(bg=C_BG, fg=C_TEXT, selectcolor=C_SURFACE,
+                        activebackground=C_BG, activeforeground=C_TEXT,
+                        font=("Segoe UI", 10, "bold"), cursor="hand2",
+                        variable=self._mode_var, command=self._on_mode_change)
+
+        # ── Mode 1 : nouveau fichier ─────────────────────────────────
+        tk.Radiobutton(body, text="  Créer un nouveau fichier", value="new", **radio_kw).pack(anchor="w")
+
+        new_frame = tk.Frame(body, bg=C_BG)
+        new_frame.pack(fill="x", pady=(4, 10), padx=(24, 0))
+        tk.Label(new_frame, text="Nom :", font=("Segoe UI", 9),
                  bg=C_BG, fg=C_TEXT_DIM).pack(side="left")
+        self._new_name_var = tk.StringVar(value="filtered_emails.txt")
+        self._new_entry = _make_entry(new_frame, self._new_name_var, active=True)
 
-        self._filename_var = tk.StringVar(value="filtered_emails.txt")
-        name_entry = tk.Entry(name_row, textvariable=self._filename_var,
-                              font=("Segoe UI", 10), bg=C_SURFACE, fg=C_TEXT,
-                              insertbackground=C_TEXT, relief="flat", bd=0, width=30)
-        name_entry.pack(side="left", padx=(10, 0), ipady=7, ipadx=8)
+        # ── Mode 2 : ajouter à un fichier existant ───────────────────
+        tk.Radiobutton(body, text="  Ajouter à un fichier existant", value="append", **radio_kw).pack(anchor="w")
 
-        # ── Mode fusion ──────────────────────────────────────────────
-        tk.Frame(body, bg=C_BG, height=10).pack()
-
-        merge_row = tk.Frame(body, bg=C_SURFACE, pady=8, padx=12)
-        merge_row.pack(fill="x")
-
-        self._append_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            merge_row,
-            text="  Ajouter au fichier existant  —  les nouvelles lignes valides seront ajoutées sans écraser",
-            variable=self._append_var,
-            bg=C_SURFACE, fg=C_TEXT,
-            selectcolor=C_BG,
-            activebackground=C_SURFACE, activeforeground=C_TEXT,
-            font=("Segoe UI", 9),
-            cursor="hand2",
-        ).pack(anchor="w")
+        append_frame = tk.Frame(body, bg=C_BG)
+        append_frame.pack(fill="x", pady=(4, 4), padx=(24, 0))
+        tk.Label(append_frame, text="Fichier cible :", font=("Segoe UI", 9),
+                 bg=C_BG, fg=C_TEXT_DIM).pack(side="left")
+        self._append_name_var = tk.StringVar(value="")
+        self._append_entry = _make_entry(append_frame, self._append_name_var, active=False)
+        tk.Label(append_frame, text="(nom du fichier existant dans Export Combos)",
+                 font=("Segoe UI", 8), bg=C_BG, fg=C_TEXT_DIM).pack(side="left", padx=(8, 0))
 
         # ── Bouton filtrer ───────────────────────────────────────────
-        tk.Frame(body, bg=C_BG, height=12).pack()
+        tk.Frame(body, bg=C_BG, height=10).pack()
 
         self._run_btn = tk.Button(
             body, text="  ▶  Filtrer  ", font=("Segoe UI", 13, "bold"),
@@ -289,12 +306,12 @@ class EmailFilterApp:
         style.theme_use("default")
         style.configure("P.Horizontal.TProgressbar",
                         troughcolor=C_SURFACE, background=C_PURPLE, borderwidth=0)
-        self._progress = ttk.Progressbar(body, mode="indeterminate", length=556,
+        self._progress = ttk.Progressbar(body, mode="indeterminate", length=576,
                                          style="P.Horizontal.TProgressbar")
         self._progress.pack(pady=(12, 0))
 
         # ── Résultats ────────────────────────────────────────────────
-        tk.Frame(body, bg=C_SURFACE, height=1).pack(fill="x", pady=(16, 0))
+        tk.Frame(body, bg=C_SURFACE, height=1).pack(fill="x", pady=(14, 0))
         self._section_label(body, "Résultats", top_pad=8)
 
         self._stats = tk.Text(body, height=8, state="disabled",
@@ -311,24 +328,56 @@ class EmailFilterApp:
         tk.Label(parent, text=text, font=("Segoe UI", 10, "bold"),
                  bg=C_BG, fg=C_TEXT).pack(anchor="w", pady=(top_pad, 0))
 
+    def _on_mode_change(self):
+        append = self._mode_var.get() == "append"
+        # Activer/désactiver les champs selon le mode
+        self._new_entry.configure(
+            state="disabled" if append else "normal",
+            bg=C_ENTRY_OFF if append else C_SURFACE,
+            fg=C_TEXT_DIM if append else C_TEXT,
+        )
+        self._append_entry.configure(
+            state="normal" if append else "disabled",
+            bg=C_SURFACE if append else C_ENTRY_OFF,
+            fg=C_TEXT if append else C_TEXT_DIM,
+        )
+
     # ── Callbacks ───────────────────────────────────────────────────
 
     def _on_file(self, path):
         self._input_path = path
         self._drop.set_file(path)
+        name = os.path.basename(path)
+        self._input_label.configure(
+            text=f"📄  {name}   —   {path}",
+            fg=C_GREEN,
+        )
         self._run_btn.configure(state="normal")
 
     def _run_filter(self):
         if not self._input_path:
             return
-        filename = self._filename_var.get().strip() or "filtered_emails.txt"
+
+        append_mode = self._mode_var.get() == "append"
+
+        if append_mode:
+            filename = self._append_name_var.get().strip()
+            if not filename:
+                messagebox.showwarning("Fichier manquant",
+                                       "Saisir le nom du fichier existant dans lequel ajouter les lignes.")
+                return
+        else:
+            filename = self._new_name_var.get().strip() or "filtered_emails.txt"
+
         if not filename.lower().endswith(".txt"):
             filename += ".txt"
-        self._filename_var.set(filename)
+        if append_mode:
+            self._append_name_var.set(filename)
+        else:
+            self._new_name_var.set(filename)
 
         os.makedirs(self._output_dir, exist_ok=True)
         output_path = os.path.join(self._output_dir, filename)
-        append_mode = self._append_var.get()
 
         self._run_btn.configure(state="disabled")
         self._progress.start(12)
@@ -359,8 +408,8 @@ class EmailFilterApp:
             return f"{n / total * 100:.1f}%" if total else "0.0%"
 
         kept_n = len(stats["kept"])
-        action = "Ajoutés au fichier" if append_mode else "Gardés"
-        file_action = "Ajouté dans" if append_mode else "Fichier écrit :"
+        action      = "Ajoutés au fichier" if append_mode else "Gardés"
+        file_action = "Ajouté dans"        if append_mode else "Fichier écrit :"
 
         segments = [
             (f"  Total lu                     : {total}\n", None),
