@@ -62,11 +62,27 @@ def parse_line(line: str):
     return email, password
 
 
-def filter_credentials(lines: list) -> dict:
+def load_existing_emails(path: str) -> set:
+    """Return the set of lowercased emails already present in an existing output file."""
+    emails = set()
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line = raw.strip()
+                parsed = parse_line(line)
+                if parsed:
+                    emails.add(parsed[0].lower())
+    except FileNotFoundError:
+        pass
+    return emails
+
+
+def filter_credentials(lines: list, existing_emails: set = None) -> dict:
     total = 0
     kept = []
     removed_domain = 0
     removed_duplicate = 0
+    removed_existing = 0
     removed_weak = 0
     removed_malformed = 0
     seen = set()
@@ -89,6 +105,9 @@ def filter_credentials(lines: list) -> dict:
             removed_weak += 1
             continue
         key = email.lower()
+        if existing_emails and key in existing_emails:
+            removed_existing += 1
+            continue
         if key in seen:
             removed_duplicate += 1
             continue
@@ -100,6 +119,7 @@ def filter_credentials(lines: list) -> dict:
         "kept": kept,
         "removed_domain": removed_domain,
         "removed_duplicate": removed_duplicate,
+        "removed_existing": removed_existing,
         "removed_weak": removed_weak,
         "removed_malformed": removed_malformed,
     }
@@ -174,7 +194,7 @@ class EmailFilterApp:
         self.root.resizable(False, False)
         self.root.configure(bg=C_BG)
         self._build_ui()
-        self._center(600, 660)
+        self._center(600, 720)
         self.root.mainloop()
 
     def _center(self, w, h):
@@ -234,6 +254,24 @@ class EmailFilterApp:
                               insertbackground=C_TEXT, relief="flat", bd=0, width=30)
         name_entry.pack(side="left", padx=(10, 0), ipady=7, ipadx=8)
 
+        # ── Mode fusion ──────────────────────────────────────────────
+        tk.Frame(body, bg=C_BG, height=10).pack()
+
+        merge_row = tk.Frame(body, bg=C_SURFACE, pady=8, padx=12)
+        merge_row.pack(fill="x")
+
+        self._append_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            merge_row,
+            text="  Ajouter au fichier existant  —  les nouvelles lignes valides seront ajoutées sans écraser",
+            variable=self._append_var,
+            bg=C_SURFACE, fg=C_TEXT,
+            selectcolor=C_BG,
+            activebackground=C_SURFACE, activeforeground=C_TEXT,
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        ).pack(anchor="w")
+
         # ── Bouton filtrer ───────────────────────────────────────────
         tk.Frame(body, bg=C_BG, height=12).pack()
 
@@ -290,6 +328,7 @@ class EmailFilterApp:
 
         os.makedirs(self._output_dir, exist_ok=True)
         output_path = os.path.join(self._output_dir, filename)
+        append_mode = self._append_var.get()
 
         self._run_btn.configure(state="disabled")
         self._progress.start(12)
@@ -297,20 +336,21 @@ class EmailFilterApp:
 
         def worker():
             try:
+                existing_emails = load_existing_emails(output_path) if append_mode else None
                 with open(self._input_path, encoding="utf-8", errors="replace") as f:
                     lines = f.readlines()
-                stats = filter_credentials(lines)
-                with open(output_path, "w", encoding="utf-8", newline="\n") as f:
-                    f.write("\n".join(stats["kept"]))
+                stats = filter_credentials(lines, existing_emails=existing_emails)
+                write_mode = "a" if append_mode else "w"
+                with open(output_path, write_mode, encoding="utf-8", newline="\n") as f:
                     if stats["kept"]:
-                        f.write("\n")
-                self.root.after(0, lambda: self._on_done(stats, output_path))
+                        f.write("\n".join(stats["kept"]) + "\n")
+                self.root.after(0, lambda: self._on_done(stats, output_path, append_mode))
             except Exception as exc:
                 self.root.after(0, lambda: self._on_error(str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_done(self, stats, output_path):
+    def _on_done(self, stats, output_path, append_mode: bool):
         self._progress.stop()
         self._run_btn.configure(state="normal")
         total = stats["total"]
@@ -319,15 +359,25 @@ class EmailFilterApp:
             return f"{n / total * 100:.1f}%" if total else "0.0%"
 
         kept_n = len(stats["kept"])
-        self._write_stats([
-            (f"  Total lu                     : {total}\n",                                               None),
-            (f"  Gardés                       : {kept_n:<6}  ({pct(kept_n)})\n",                         "green"),
+        action = "Ajoutés au fichier" if append_mode else "Gardés"
+        file_action = "Ajouté dans" if append_mode else "Fichier écrit :"
+
+        segments = [
+            (f"  Total lu                     : {total}\n", None),
+            (f"  {action:<28} : {kept_n:<6}  ({pct(kept_n)})\n", "green"),
+        ]
+        if append_mode and stats["removed_existing"]:
+            segments.append(
+                (f"  Déjà dans le fichier         : {stats['removed_existing']:<6}  ({pct(stats['removed_existing'])})\n", "dim")
+            )
+        segments += [
             (f"  Supprimés (domaine hors .fr) : {stats['removed_domain']:<6}  ({pct(stats['removed_domain'])})\n", "yellow"),
             (f"  Supprimés (mot de passe)     : {stats['removed_weak']:<6}  ({pct(stats['removed_weak'])})\n",     "yellow"),
             (f"  Supprimés (doublons)         : {stats['removed_duplicate']:<6}  ({pct(stats['removed_duplicate'])})\n", "yellow"),
             (f"  Supprimés (malformés)        : {stats['removed_malformed']:<6}  ({pct(stats['removed_malformed'])})\n", "red"),
-            (f"\n  Fichier écrit :\n  {output_path}", "dim"),
-        ])
+            (f"\n  {file_action}\n  {output_path}", "dim"),
+        ]
+        self._write_stats(segments)
 
     def _on_error(self, message):
         self._progress.stop()
